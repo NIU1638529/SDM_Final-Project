@@ -1,0 +1,282 @@
+====================================================================
+PROJECT CONTEXT — Knowledge Graph Exploitation Lab
+SDM Master's Assignment — UPC Barcelona
+====================================================================
+
+Last updated: 2026-05-20
+
+====================================================================
+1. ASSIGNMENT OVERVIEW
+====================================================================
+
+This is a hands-on lab on Knowledge Graph (KG) exploitation.
+The assignment has two main parts:
+
+PART A — Knowledge Graph Embeddings (KGEs) using PyKEEN
+PART B — Graph Neural Networks (GNNs) using PyTorch Geometric
+
+Dataset: PubMed citation network
+    - 19,717 papers (nodes)
+    - 44,338 citation links (edges)
+    - Single relation type: "cites"
+    - Each node also has a TF-IDF feature vector (dim 500) — used in Part B
+    - Each node has a label: one of 3 diabetes types — used in Part B
+        0: Diabetes Mellitus Experimental
+        1: Diabetes Mellitus Type 1
+        2: Diabetes Mellitus Type 2
+
+The dataset is loaded via PyTorch Geometric (Planetoid) and converted
+to KGE triples for Part A. The split is always:
+    training   (80%) random_state=2026
+    validation (10%) random_state=2026
+    testing    (10%) random_state=2026
+
+The random_state=2026 ensures full reproducibility across all runs.
+
+====================================================================
+2. PART A — STATUS AND DECISIONS
+====================================================================
+
+--------------------------------------------------------------------
+A.1 — THE MOST BASIC MODEL (COMPLETED)
+--------------------------------------------------------------------
+
+WHAT WAS DONE:
+- Trained TransE on the PubMed KG using PyKEEN pipeline
+- Hyperparameters: embedding_dim=128, num_epochs=100, batch_size=512,
+  random_seed=2026
+- These are "sensible" values as required by the assignment —
+  no optimization needed
+
+PAPER SELECTION:
+- Filtered papers with 8-12 outgoing citations in the training set
+  (range chosen to balance representativeness vs generality)
+- Sorted by paper number numerically, selected iloc[0] (first one)
+- This selection is always deterministic and reproducible because:
+    1. Split uses random_state=2026 → same training set always
+    2. Numeric sort is deterministic → same paper always
+- The same paper A and paper X are obtained in every run
+
+MATHEMATICAL REASONING:
+- TransE: e(head) + e("cites") ≈ e(tail)
+- Let B1..Bn be papers cited by paper A
+- mean_cited = mean(e(B1), ..., e(Bn))
+- TARGET = mean_cited - e("cites")
+- TARGET represents the ideal embedding of any paper that cites
+  similar works to paper A
+- Paper X = paper whose embedding has highest cosine similarity
+  to TARGET (excluding paper A itself)
+
+NOTE ON "COLLAPSE":
+- Papers cited by A do NOT literally collapse to the same point
+  in the embedding space because they are constrained by many
+  other triples (other papers that cite them, etc.)
+- TransE finds a global compromise — the limitation is not literal
+  collapse but reduced accuracy (lower Hits@K, MRR) for one-to-many
+
+DELIVERABLES FOR PDF:
+- Paper A chosen: first paper with 8-12 outgoing citations
+- Hyperparameters listed
+- Mathematical reasoning: TARGET = mean_cited - e("cites")
+- 2D sketch: PCA plot saved as A1_visualization.png
+- Paper X: closest paper to TARGET by cosine similarity + score
+
+CODE FILE: in the notebook (Lab-Template.ipynb), section A.1
+
+--------------------------------------------------------------------
+A.2 — IMPROVING TransE (COMPLETED — EXPLANATION ONLY, NO CODE)
+--------------------------------------------------------------------
+
+LIMITATION IDENTIFIED:
+- One-to-many: "cites" is inherently one-to-many (a paper cites
+  multiple papers). TransE cannot satisfy all constraints simultaneously
+  without residual error, leading to lower Hits@K and MRR.
+
+EXAMPLE TRIPLES FROM OUR KG:
+    (paper_A, cites, paper_B)
+    (paper_A, cites, paper_C)
+    (paper_A, cites, paper_D)
+TransE forces e(B) ≈ e(C) ≈ e(D) in theory, creating contradictions.
+
+SOLUTION: TransH (Wang et al., 2014)
+- Projects entities onto a relation-specific hyperplane
+- h_perp = h - w_r^T · h · w_r
+- t_perp = t - w_r^T · t · w_r
+- Loss = |(h_perp) + d_r - (t_perp)|
+- B, C, D can remain distinct in the full space while being
+  consistent on the hyperplane
+
+IMPORTANT: Both TransE and TransH are explicitly covered in the
+theory slides (TEORIA.pdf):
+    TransE:  pages 61-70
+    TransH:  pages 71-73
+    RotatE:  pages 68, 74
+
+NOTEBOOK CODE CELL:
+- The A.2 code cell only needs a comment with the paper reference:
+  Wang et al. (2014) - "Knowledge Graph Embedding by Translating
+  on Hyperplanes" — AAAI 2014
+
+DELIVERABLES FOR PDF:
+- Example triples showing the one-to-many problem
+- Explanation of why TransE fails (contradictory constraints)
+- TransH explanation with formula and hyperplane concept
+- All referenced from theory slides
+
+--------------------------------------------------------------------
+A.3 — TRAINING KGEs (IN PROGRESS)
+--------------------------------------------------------------------
+
+MODELS TRAINED (5 total — mix of translational and semantic):
+    Translational: TransE, TransH, RotatE
+    Semantic:      DistMult, ComplEx
+
+All models use:
+    embedding_dim = 128
+    num_epochs    = 100
+    batch_size    = 512
+    random_seed   = 2026
+    early_stopping: metric=MRR, patience=5, relative_delta=0.002
+                    (monitors validation set, stops if no improvement)
+
+FIRST RUN RESULTS (without early stopping):
+    Model        Hits@1   Hits@3    MRR
+    TransE       0.0000   0.4141   0.2354
+    TransH       0.0030   0.0263   0.0310
+    RotatE       0.6302   0.7324   0.6952  ← BEST
+    DistMult     0.4097   0.5256   0.4925
+    ComplEx      0.0002   0.0010   0.0071
+
+RESULTS ANALYSIS:
+- RotatE dominates: "cites" is asymmetric and directional.
+  Rotation in complex space captures directionality perfectly.
+- DistMult second: semantic matching captures latent patterns despite
+  assuming symmetry.
+- TransE mediocre: Hits@1=0 means it never gets exact answer.
+  One-to-many limitation hurts significantly.
+- TransH worse than TransE: likely needs more epochs or different
+  learning rate to converge with its extra parameters.
+- ComplEx failed: complex embeddings double parameter count,
+  100 epochs not enough to converge.
+
+SELECTION METRIC: MRR (primary) — more informative than Hits@K
+because it gives partial credit based on exact rank rather than
+binary yes/no.
+
+BEST MODEL: RotatE (MRR=0.6952)
+Best embeddings saved: best_entity_embeddings.npy (shape 19717 x 128)
+These embeddings will be used in B.5.2 as GNN initial features.
+
+HYPERPARAMETER EXPLORATION (IN PROGRESS — awaiting results):
+Base model: RotatE (best performer)
+Variables being explored one at a time:
+
+1. Embedding dimension: [64, 128, 256]
+   Expected: larger = more expressive but slower, risk of overfitting
+
+2. Number of negative samples per positive: [1, 5, 10]
+   Expected: more negatives = stronger signal but higher cost
+
+3. Loss margin: [0.5, 1.0, 2.0]
+   Expected: larger margin = stricter separation but harder optimization
+
+NEXT STEP (pending):
+- Receive hyperparameter exploration results
+- Identify best value for each hyperparameter
+- Train a final RotatE model with the best combination
+- Compare against base RotatE — save as definitive best embeddings
+
+DELIVERABLES FOR PDF:
+- Table with Hits@1, Hits@3, MRR for all 5 models
+- Comment on each model based on its theoretical assumptions
+- Table for each hyperparameter showing effect on MRR
+- Comment on expected vs observed effects
+
+====================================================================
+3. PART B — NOT YET STARTED
+====================================================================
+
+OVERVIEW OF WHAT IS NEEDED:
+
+B.1 — Classifiers without graph (sklearn: RF, SVM, LR)
+      Uses TF-IDF features only. Report accuracy table.
+
+B.2 — GNN architecture (PyTorch Geometric)
+      Min: 2 GNN layers + Linear, hidden_dim=256
+      Layers: GNNConv → ReLU → Dropout → Linear
+      Report accuracy and comment.
+
+B.3 — Tricking the GNN (theoretical)
+      Strategy to misclassify Type 1 paper as Type 2 by adding
+      3 fake citation edges to Type 2 papers.
+
+B.4 — Effect of GNN depth (2, 4, 8, 16 layers)
+      Observe over-smoothing phenomenon.
+
+B.5.1 — Random initialization
+        Replace TF-IDF with random vectors dim 256.
+
+B.5.2 — KGE initialization
+        Use best_entity_embeddings.npy (from A.3 RotatE) as
+        initial node features instead of TF-IDF.
+        IMPORTANT: ensure entity order matches between PyKEEN
+        and PyTorch Geometric.
+
+B.6 — Link prediction with GNNs (theoretical + sketch)
+      How to adapt node classification GNN to link prediction:
+      combine embeddings of node pairs, add scoring layer,
+      change loss to binary cross-entropy.
+
+B.7 — Extract GNN embeddings
+      Modify forward() with return_embs=True parameter.
+      Extract embeddings before final linear layer.
+      Apply PCA, visualize colored by diabetes class.
+
+B.8 — Embedding spaces comparison (theoretical)
+      KGE vs GNN embeddings — different spaces, not mixable.
+      Top-10 nearest neighbors by cosine similarity in each space.
+
+B.9 — New paper embedding (theoretical)
+      KGE: transductive, hard to embed new entities without retraining.
+      GNN: inductive, can run forward pass with new node features + edges.
+
+====================================================================
+4. KEY FILES IN THE PROJECT FOLDER
+====================================================================
+
+Lab-Template.ipynb              → main notebook (code goes here)
+best_entity_embeddings.npy      → RotatE embeddings (19717 x 128)
+A1_visualization.png            → PCA plot for A.1
+A1_A2_explanation.txt           → detailed explanation of A.1 and A.2
+CONTEXT.txt                     → this file
+
+PDFs (reference material):
+    Graph representation language TEORIA.pdf     → theory slides
+    Grah representatio learning LAB ASSIGNMEMT.pdf → assignment statement
+    Slides Graph representation learning LAB.pdf → lab slides
+
+====================================================================
+5. IMPORTANT CONCEPTS SUMMARY
+====================================================================
+
+METRICS:
+- Hits@K: % of test triples where the correct entity is in top K
+  ranked predictions (link prediction task: hide tail, rank all entities)
+- MRR: mean of 1/rank across all test triples — main selection metric
+
+EARLY STOPPING:
+- Monitors MRR on VALIDATION set during training
+- Stops if no improvement > 0.2% for 5 consecutive evaluations
+- Test set is ONLY used for final evaluation (never during training)
+
+EMBEDDING SIZE:
+- Free hyperparameter — not fixed by the dataset
+- 128 is a standard sensible value for this KG size
+- Larger = more expressive but more parameters + slower
+
+SPLIT PURPOSE IN KGE:
+- Not to avoid overfitting as in supervised ML
+- To have hidden triples (test) for link prediction evaluation
+- Stratification ensures all entities appear in training
+
+====================================================================
