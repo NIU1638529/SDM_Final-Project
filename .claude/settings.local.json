@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Read(//c/Users/adals/OneDrive/Escritorio/Máster/SDM/Property graphs/**)",
+      "Read(//c/Users/adals/OneDrive/Escritorio/Máster/SDM/Exams/**)"
+    ]
+  }
+}
