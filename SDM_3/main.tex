@@ -1,0 +1,617 @@
+\documentclass{article}
+
+% Language setting
+% Replace `english' with e.g. `spanish' to change the document language
+\usepackage[english]{babel}
+
+% Set page size and margins
+% Replace `letterpaper' with `a4paper' for UK/EU standard size
+\usepackage[letterpaper,top=2cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+
+% Useful packages
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+\usepackage{hyperref}      
+
+\usepackage{caption}
+\usepackage{subcaption}
+
+\usepackage{diagbox}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{tcolorbox}
+\tcbset{colback=white, colframe=black, boxrule=0.5pt}
+
+\newcommand{\drug}{\texttt{bio:Drug}}
+\newcommand{\disease}{\texttt{bio:Disease}}
+\newcommand{\type}{\texttt{rdf:type}}
+\newcommand{\domain}{\texttt{rdfs:domain}}
+\newcommand{\range}{\texttt{rdfs:range}}
+\newcommand{\subclassof}{\texttt{rdfs:subClassOf}}
+\newcommand{\affects}{\texttt{bio:affects}}
+\newcommand{\plass}{\texttt{rdfs:Class}}
+\newcommand{\property}{\texttt{rdf:Property}}
+
+% Set the section counter to start at 0
+\setcounter{section}{-1}
+
+% Change section numbering to Alphabetic (A, B, C...)
+\renewcommand{\thesection}{\Alph{section}}
+
+% Special rule to show the first section (index 0) as "0"
+\renewcommand{\thesection}{\ifnum\value{section}=0 0\else\Alph{section}\fi}
+
+\usepackage{minted}
+
+
+\usepackage[style=numeric,backend=biber]{biblatex}
+\addbibresource{references.bib} % The name of your .bib file
+
+\begin{document}
+
+% --- START OF FULL TITLE PAGE ---
+\begin{titlepage}
+    \centering
+    \vspace*{3cm} % Adjust space from top
+    
+    {\Huge \textbf{Knowledge Graphs Exploitation} \par}
+    \vspace{0.5cm}
+    {\LARGE Master's degree in Data Science \\ \LARGE Semantic Data Management \par}
+    \vspace{0.3cm}
+    {\Large Lab Assignment 3}
+    
+    \vspace{2.5cm}
+    
+    {\Large \textbf{Authors:}} \\
+    \vspace{0.5cm}
+    {\Large Pau Adal Solís \\ Antoni Lopera Barril \par}
+
+
+    \vspace{3cm}
+    
+    \includegraphics[width=0.2\textwidth]{UPC logo.png}
+    
+    \vfill % Pushes the date to the bottom
+    
+    {\Large \today \par} % Automatically inserts current date
+    \vspace{2cm}
+\end{titlepage}
+% --- END OF FULL TITLE PAGE ---
+
+\tableofcontents
+
+
+
+
+% ====================================================================
+\section*{A \hspace{0.5em} Getting Familiar with KGEs}
+% ====================================================================
+
+We use the \textbf{PubMed} citation dataset: 19,717 papers (nodes) and 44,338
+citation links (edges), with a single relation type \texttt{cites}. The graph is
+loaded via PyTorch Geometric's \texttt{Planetoid} and converted into KGE triples
+of the form \texttt{(paper\_i, cites, paper\_j)}, then split deterministically
+into training (80\%), validation (10\%) and testing (10\%) with
+\texttt{random\_state = 2026} for full reproducibility.
+
+% --------------------------------------------------------------------
+\subsection*{A.1 \hspace{0.3em} The Most Basic Model}
+% --------------------------------------------------------------------
+
+\paragraph{Model and hyperparameters.}
+We train a \textbf{TransE} model with PyKEEN. The assignment statement only
+requires a \emph{sensible} configuration, so we use the values shown in
+Table~\ref{tab:a1-hparams}. These follow the typical defaults recommended in the
+PyKEEN documentation and are large enough to obtain meaningful embeddings on a
+KG of this size without overfitting.
+
+\begin{table}[H]
+\centering
+\caption{TransE hyperparameters used in A.1.}
+\label{tab:a1-hparams}
+\begin{tabular}{ll}
+\toprule
+\textbf{Hyperparameter} & \textbf{Value} \\
+\midrule
+Embedding dimension     & 128 \\
+Number of training epochs & 100 \\
+Batch size              & 512 \\
+Random seed             & 2026 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Paper selection.}
+From the training triples, we filter the papers that have between $8$ and $12$
+outgoing citations (this range balances representativeness --- a paper with too
+few citations would give a noisy mean --- with generality). We sort the
+candidates numerically by paper id and pick the first one. Because the split is
+seeded and the sort is deterministic, the chosen paper is always the same in
+every execution. We denote this paper as \textbf{A}.
+
+\paragraph{Mathematical reasoning.}
+TransE encodes the assumption that
+\begin{equation}
+    \mathbf{e}(h) + \mathbf{e}(r) \;\approx\; \mathbf{e}(t)
+    \qquad \forall (h,r,t) \in \mathcal{KG}.
+\end{equation}
+Let $B_1,\dots,B_n$ be the papers cited by $A$, i.e., the set of triples
+$(A, \texttt{cites}, B_i)$ for $i=1,\dots,n$. We are looking for the most
+probable embedding $\mathbf{x}^\star$ of a \emph{hypothetical paper} $X$ that
+would cite works similar to those cited by $A$. Applying the TransE
+relation translation, each citation $(X, \texttt{cites}, B_i)$ implies
+\begin{equation}
+    \mathbf{x}^\star + \mathbf{e}(\texttt{cites}) \;\approx\; \mathbf{e}(B_i)
+    \;\;\Longleftrightarrow\;\;
+    \mathbf{x}^\star \;\approx\; \mathbf{e}(B_i) - \mathbf{e}(\texttt{cites}).
+\end{equation}
+Since we want one single vector $\mathbf{x}^\star$ that is consistent with all
+$n$ constraints simultaneously, we take the mean of the $n$ right-hand sides:
+\begin{equation}
+    \boxed{\;
+    \mathbf{TARGET} \;=\; \mathbf{x}^\star
+    \;=\;
+    \underbrace{\frac{1}{n}\sum_{i=1}^n \mathbf{e}(B_i)}_{\textstyle \overline{\mathbf{e}_\text{cited}}}
+    \;-\; \mathbf{e}(\texttt{cites}).
+    \;}
+\end{equation}
+This is the least-squares optimum: \textbf{TARGET} minimises
+$\sum_{i=1}^{n}\Vert (\mathbf{x}+\mathbf{e}(\texttt{cites})) -
+\mathbf{e}(B_i)\Vert^{2}$ over $\mathbf{x}$.
+
+\paragraph{Retrieving the closest real paper.}
+We then search for the existing paper whose embedding is closest to
+\textbf{TARGET} in the learned space. We use \emph{cosine similarity} because
+TransE embeddings are unconstrained in magnitude and angular distance is the
+standard choice. The candidate $A$ itself is excluded from the search. The
+recovered paper is called \textbf{X}:
+\begin{equation}
+    X \;=\; \arg\!\max_{p \,\in\, \mathcal{V} \setminus \{A\}}
+    \cos\!\big(\mathbf{e}(p), \mathbf{TARGET}\big).
+\end{equation}
+
+\paragraph{Results.}
+Table~\ref{tab:a1-result} summarises the outcome. Figure~\ref{fig:a1-pca} shows
+the 2D sketch of the reasoning, obtained by PCA-projecting the embeddings of
+$A$, its cited papers $\{B_i\}$, the \textbf{TARGET} vector, and the retrieved
+paper $X$.
+
+\begin{table}[H]
+\centering
+\caption{Result of the closest-paper search in A.1.}
+\label{tab:a1-result}
+\begin{tabular}{ll}
+\toprule
+\textbf{Field} & \textbf{Value} \\
+\midrule
+Chosen paper $A$        & \texttt{<paper\_A>} \\
+\# outgoing citations of $A$ & $n \in [8,12]$ \\
+Retrieved paper $X$     & \texttt{<paper\_X>} \\
+$\cos(\mathbf{e}(X), \mathbf{TARGET})$ & $<$value$>$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\linewidth]{A1_visualization.png}
+\caption{2D PCA projection of TransE embeddings. Paper $A$ (blue), papers cited
+by $A$ (grey), the computed \textbf{TARGET} vector (orange star) and the
+retrieved paper $X$ (red) closest to \textbf{TARGET} by cosine similarity. The
+target vector lies in the geometric centre of the cited papers translated by
+$-\mathbf{e}(\texttt{cites})$, exactly as predicted by the TransE translation
+assumption.}
+\label{fig:a1-pca}
+\end{figure}
+
+\paragraph{Interpretation.}
+The recovered paper $X$ is the paper of the corpus whose embedding most
+closely matches the ideal position predicted by TransE for a paper that would
+cite works similar to those of $A$. Intuitively, $X$ acts as a
+``citation-twin'' of $A$: it is the paper whose citation behaviour the model
+expects to be most similar to that of $A$ at the relation level. The companion
+code that produces this analysis is provided in the notebook
+\texttt{Lab\_Template.ipynb}, section \emph{A.1}.
+
+% --------------------------------------------------------------------
+\subsection*{A.2 \hspace{0.3em} Improving TransE}
+
+
+\paragraph{The drawback: one-to-many relations.}
+TransE relies on the strict translation assumption
+$\mathbf{e}(h) + \mathbf{e}(r) \approx \mathbf{e}(t)$ \emph{for every} triple.
+This works well for one-to-one relations but breaks down for the
+\textbf{one-to-many} (and many-to-many) case. In our KG the only relation,
+\texttt{cites}, is intrinsically one-to-many: a single paper typically cites
+several different papers. Whenever a head $h$ participates in $n>1$ triples
+with the same relation $r$,
+\begin{equation}
+    (h, r, t_1),\, (h, r, t_2),\, \dots,\, (h, r, t_n) \,\in\, \mathcal{KG},
+\end{equation}
+TransE has to satisfy $n$ constraints simultaneously:
+\begin{equation}
+    \mathbf{e}(h) + \mathbf{e}(r) \;\approx\; \mathbf{e}(t_1)
+    \quad\wedge\quad
+    \mathbf{e}(h) + \mathbf{e}(r) \;\approx\; \mathbf{e}(t_2)
+    \quad\wedge\;\cdots\;\wedge\quad
+    \mathbf{e}(h) + \mathbf{e}(r) \;\approx\; \mathbf{e}(t_n).
+\end{equation}
+Since the left-hand side is identical in all $n$ equations, the right-hand
+sides are forced to coincide:
+\begin{equation}
+    \mathbf{e}(t_1) \;\approx\; \mathbf{e}(t_2) \;\approx\; \cdots
+    \;\approx\; \mathbf{e}(t_n).
+\end{equation}
+This contradicts the fact that $t_1,\dots,t_n$ are \emph{different} entities
+that, in general, participate in many other triples and therefore should be
+representable by distinct vectors. The model can only find a global compromise
+that increases the residual error and degrades link-prediction quality (low
+Hits@1, low MRR, as we confirm empirically in A.3).
+
+\paragraph{Concrete example from our KG.}
+Consider any paper $A$ from the PubMed KG (e.g., the paper selected in A.1).
+A subset of triples in the training set has the form
+\begin{align}
+    (A,\, \texttt{cites},\, B_1) \nonumber\\
+    (A,\, \texttt{cites},\, B_2) \nonumber\\
+    \;\;\vdots\;\;            \nonumber\\
+    (A,\, \texttt{cites},\, B_n) \label{eq:one-to-many-example}
+\end{align}
+with $n$ between 8 and 12 in our selected case. TransE forces
+$\mathbf{e}(B_1) \approx \mathbf{e}(B_2) \approx \cdots \approx \mathbf{e}(B_n)$,
+even though these papers are heterogeneous: they are cited by many other
+papers and each one participates in its own set of triples. The constraint
+system has no exact solution and the loss never converges to zero --- this
+explains the limited expressive power of TransE on citation-style KGs.
+
+\paragraph{The solution: TransH \cite{wang2014transh}.}
+TransH \emph{(Wang et al., AAAI 2014)} fixes the one-to-many problem by
+\textbf{projecting} entities onto a \emph{relation-specific hyperplane}
+before applying the translation. For each relation $r$, the model learns two
+vectors:
+\begin{itemize}[leftmargin=1.5em,nosep]
+    \item the \textbf{hyperplane normal} $\mathbf{w}_r \in \mathbb{R}^d$ with
+          $\Vert\mathbf{w}_r\Vert = 1$;
+    \item the \textbf{translation vector} $\mathbf{d}_r \in \mathbb{R}^d$
+          that lives \emph{on} the hyperplane.
+\end{itemize}
+Any entity embedding $\mathbf{e}$ is projected onto the hyperplane of $r$ by
+removing its component along the normal:
+\begin{equation}
+    \mathbf{e}_\perp
+    \;=\;
+    \mathbf{e} \;-\; \big(\mathbf{w}_r^{\top}\mathbf{e}\big)\,\mathbf{w}_r.
+\end{equation}
+The triple-plausibility (energy) score becomes
+\begin{equation}
+    f_r(h, t)
+    \;=\;
+    \big\Vert\,
+        \mathbf{e}_\perp(h) \;+\; \mathbf{d}_r \;-\; \mathbf{e}_\perp(t)
+    \,\big\Vert_{2}^{\,2}.
+\end{equation}
+The translation is now performed on a \emph{relation-dependent} subspace, so
+two entities $t_i$ and $t_j$ that share the same head $h$ under relation $r$
+can have distinct embeddings in the original space $\mathbb{R}^d$ while their
+\emph{projections} on the hyperplane of \texttt{cites} are forced to coincide
+with $\mathbf{e}_\perp(h)+\mathbf{d}_r$. In other words, $B_1,\dots,B_n$ can
+remain different along the direction $\mathbf{w}_r$ (which is the dimension
+\textit{not} used by this relation) and only need to agree on the $d-1$
+remaining directions. The contradiction (3) is therefore resolved.
+
+\paragraph{Geometric intuition.}
+TransE places all tails $t_i$ at the same point
+$\mathbf{e}(h)+\mathbf{e}(r)$, which is impossible to satisfy for several
+distinct $t_i$. TransH instead constrains only the projection onto the
+hyperplane, leaving one dimension free along $\mathbf{w}_r$ where the tails
+can be spread apart. Every relation gets its own hyperplane, so a single
+entity can play different roles under different relations without conflicting
+constraints. Empirically (see A.3) this richer geometry improves the
+modelling of one-to-many citation patterns over plain TransE.
+
+
+% --------------------------------------------------------------------
+\subsection*{A.3 \hspace{0.3em} Training KGEs}
+
+ Five Knowledge Graph Embedding (KGE) models were trained on the PubMed citation
+  graph: three translational models (TransE, TransH, RotatE) and two semantic models
+  (DistMult, ComplEx). All models were trained using the PyKEEN pipeline with the
+  following base configuration:
+
+  \begin{itemize}
+      \item \textbf{Embedding dimension:} 128
+      \item \textbf{Number of epochs:} 100 (maximum)
+      \item \textbf{Batch size:} 512
+      \item \textbf{Random seed:} 2026
+      \item \textbf{Negative sampling:} Uniform (default)
+      \item \textbf{Early stopping:} monitored on validation MRR,
+      patience = 5 evaluations, relative delta = 0.002
+  \end{itemize}
+
+  Early stopping monitors the Mean Reciprocal Rank (MRR) on the validation set
+  after each evaluation. Training is stopped when no improvement greater than 0.2\%
+  is observed for 5 consecutive evaluations, and the model weights are restored
+  to the best checkpoint found during training. This prevents overfitting and
+  reduces unnecessary computation.
+
+  \subsubsection*{Results}
+
+  \begin{table}[h]
+  \centering
+  \begin{tabular}{lccc}
+  \hline
+  \textbf{Model} & \textbf{Hits@1} & \textbf{Hits@3} & \textbf{MRR} \\
+  \hline
+  TransE   & 0.0000 & 0.4141 & 0.2354 \\
+  TransH   & 0.0027 & 0.0262 & 0.0296 \\
+  RotatE   & \textbf{0.6302} & \textbf{0.7324} & \textbf{0.6952} \\
+  DistMult & 0.4579 & 0.5624 & 0.5316 \\
+  ComplEx  & 0.0002 & 0.0010 & 0.0071 \\
+  \hline
+  \end{tabular}
+  \caption{Link prediction results on the test set for all trained KGE models.}
+  \label{tab:kge_results}
+  \end{table}
+
+  \subsubsection*{Analysis}
+
+  \textbf{RotatE} achieves by far the best performance (MRR = 0.6952, Hits@1 = 0.6302).
+  This is consistent with its theoretical properties: RotatE models each relation as
+  a rotation in complex vector space, which allows it to capture asymmetric and
+  directional relations. Since \textit{cites} is inherently asymmetric --- the fact
+  that paper A cites paper B does not imply the reverse --- RotatE's geometric
+  formulation is well-suited to this KG. Its embeddings are saved as
+  \texttt{best\_entity\_embeddings.npy} (shape: 19717 $\times$ 128) for use in
+  Section B.5.2.
+
+  \textbf{DistMult} ranks second (MRR = 0.5316). Although DistMult assumes symmetric
+  relations through its bilinear score $\text{Score}(h, r, t) = h^\top \text{diag}(r) t$,
+  it still captures latent semantic patterns effectively. The rich semantic structure
+  of the citation graph compensates for the symmetry assumption to some extent.
+
+  \textbf{TransE} obtains a mediocre MRR of 0.2354 and a Hits@1 of 0.0000, meaning
+  it never correctly predicts the exact tail entity. This is a direct consequence of
+  the one-to-many limitation discussed in Section A.2: since a paper typically cites
+  multiple papers, TransE cannot simultaneously satisfy all translational constraints
+  without residual error.
+
+  \textbf{TransH} performs surprisingly worse than TransE (MRR = 0.0296), despite
+  being theoretically superior for one-to-many relations. This is likely due to its
+  additional parameters (the relation-specific hyperplane vectors $w_r$ and $d_r$),
+  which require more training time to converge. With only 100 epochs available and
+  early stopping, TransH does not have sufficient training budget to reach its
+  optimal configuration.
+
+  \textbf{ComplEx} barely learns (MRR = 0.0071). Like TransH, its complex-valued
+  embeddings double the parameter count compared to DistMult, making convergence
+  within 100 epochs very difficult for a graph of this size.
+
+  \subsubsection*{Hyperparameter Exploration}
+
+  To understand the effect of key training parameters, RotatE was retrained varying
+  one parameter at a time while keeping the rest fixed at the base configuration.
+  Early stopping was applied in all runs.
+
+  \paragraph{Embedding Dimension}
+
+  \begin{table}[h]
+  \centering
+  \begin{tabular}{lccc}
+  \hline
+  \textbf{Embedding Dim} & \textbf{Hits@1} & \textbf{Hits@3} & \textbf{MRR} \\
+  \hline
+  64  & 0.6177 & 0.7090 & 0.6783 \\
+  128 & 0.6302 & 0.7324 & 0.6952 \\
+  \textbf{256} & \textbf{0.6479} & \textbf{0.7382} & \textbf{0.7068} \\
+  512 & 0.6258 & 0.7278 & 0.6905 \\
+  \hline
+  \end{tabular}
+  \caption{Effect of embedding dimension on RotatE performance.}
+  \end{table}
+
+  As expected, increasing the embedding dimension improves performance up to a point,
+  as larger embeddings provide more expressive power to capture complex relational
+  patterns. The optimal value is 256, achieving MRR = 0.7068. At dimension 512,
+  performance slightly decreases. Since early stopping controls training duration,
+  this drop is likely due to the model having too many parameters relative to the
+  size of the training set, leading to poorer generalisation despite not overfitting
+  in the classical sense.
+
+  \paragraph{Number of Negative Samples per Positive}
+
+  \begin{table}[h]
+  \centering
+  \begin{tabular}{lccc}
+  \hline
+  \textbf{Num Negatives} & \textbf{Hits@1} & \textbf{Hits@3} & \textbf{MRR} \\
+  \hline
+  1  & 0.6302 & 0.7324 & 0.6952 \\
+  5  & 0.7055 & 0.7964 & 0.7586 \\
+  \textbf{10} & \textbf{0.7364} & \textbf{0.8125} & \textbf{0.7810} \\
+  \hline
+  \end{tabular}
+  \caption{Effect of number of negative samples per positive on RotatE performance.}
+  \end{table}
+
+  Increasing the number of negative samples per positive triple consistently and
+  significantly improves performance. More negatives provide a stronger and more
+  diverse training signal, forcing the model to learn finer distinctions between
+  valid and invalid triples. This is both the expected and observed behaviour. The
+  improvement from 1 to 10 negatives is substantial (+8.6 MRR points), suggesting
+  that the base configuration was under-sampling negatives.
+
+  \paragraph{Loss Margin}
+
+  \begin{table}[h]
+  \centering
+  \begin{tabular}{lccc}
+  \hline
+  \textbf{Margin} & \textbf{Hits@1} & \textbf{Hits@3} & \textbf{MRR} \\
+  \hline
+  \textbf{0.5} & \textbf{0.6578} & \textbf{0.7506} & \textbf{0.7151} \\
+  1.0 & 0.6302 & 0.7324 & 0.6952 \\
+  2.0 & 0.5408 & 0.6458 & 0.6122 \\
+  \hline
+  \end{tabular}
+  \caption{Effect of loss margin on RotatE performance.}
+  \end{table}
+
+  Contrary to the naive expectation that a larger margin enforces stricter separation
+  and thus improves performance, smaller margins yield better results. A large margin
+  makes the optimisation problem harder: the model is required to produce a very large
+  score gap between positive and negative triples, which is difficult to achieve within
+  100 epochs on a graph of this complexity. A margin of 0.5 provides sufficient
+  separation while remaining achievable, leading to the best MRR of 0.7151.
+% --------------------------------------------------------------------
+% TODO
+
+% --------------------------------------------------------------------
+\subsection*{A.4 \hspace{0.3em} Negative Sampling}
+% --------------------------------------------------------------------
+% TODO
+
+
+  KGE models learn to give high scores to positive triples $(h, r, t)$.
+  The problem is that if we only show the model positive examples,
+  it can cheat by giving a high score to everything without learning
+  anything useful. Negative sampling fixes this by creating fake triples
+  where either the head or the tail is replaced with a random entity,
+  so the model has to learn to tell real triples from fake ones.
+
+  The simplest approach is \textbf{Uniform Sampling} that basically gives the sample probaility of changing the head or tail ($50\%$ chance of
+  replacing the head, $50\%$ chance of replacing the tail). It does not
+  consider what kind of relation we are dealing with.
+  
+On the other hand, \textbf{Bernoulli sampling} uses two statistics from the training set to decide
+  which side to corrupt more often. The idea is that for a one-to-many
+  relation, randomly replacing the tail often produces a plausible triple
+  that could actually be true, giving the model an easy negative that
+  does not help it learn. The same problem happens on the head side for
+  many-to-one relations.
+  
+ Bernoulli sampling uses two statistics computed from the training set to decide
+  which side to corrupt more often:
+
+  \begin{itemize}
+    \item $\text{tph}$: average number of tails per head.
+    \item $\text{hpt}$: average number of heads per tail.
+  \end{itemize}
+
+  \begin{align}
+    P(\text{corrupt tail}) &= \frac{\text{tph}}{\text{tph} + \text{hpt}} \\[4pt]
+    P(\text{corrupt head}) &= \frac{\text{hpt}}{\text{tph} + \text{hpt}}
+  \end{align}
+
+  If the relation is one-to-many ($\text{tph} \gg \text{hpt}$), it corrupts
+  the tail more often to generate harder negatives. If it is many-to-one,
+  it does the opposite.
+
+  From the PubMed training set (70{,}918 triples, 19{,}717 distinct heads,
+  17{,}353 distinct tails):
+
+  \[
+    \text{tph} = \frac{70918}{19717} = 3.5968, \qquad
+    \text{hpt} = \frac{70918}{17353} = 4.0868
+  \]
+
+  \[
+    P(\text{corrupt tail}) = \frac{3.5968}{3.5968 + 4.0868} = 0.4681, \qquad
+    P(\text{corrupt head}) = \frac{4.0868}{3.5968 + 4.0868} = 0.5319
+  \]
+
+  \begin{table}[h]
+  \centering
+  \begin{tabular}{lcc}
+  \hline
+  \textbf{Statistic} & \textbf{Uniform} & \textbf{Bernoulli} \\
+  \hline
+  tph & --- & 3.5968 \\
+  hpt & --- & 4.0868 \\
+  $P(\text{corrupt head})$ & 0.5000 & 0.5319 \\
+  $P(\text{corrupt tail})$ & 0.5000 & 0.4681 \\
+  \hline
+  \end{tabular}
+  \caption{Negative sampling statistics for the \textit{cites} relation.}
+  \label{tab:a4}
+  \end{table}
+
+  As we can see, the tph and hpt values are quite similar ($3.60$ vs $4.09$),
+  so Bernoulli ends up giving almost the same probabilities as uniform
+  ($0.53$ vs $0.47$). This makes sense for the \textit{cites} relation because
+  in PubMed, papers tend to cite a similar number of papers as they get
+  cited by, so the relation is roughly balanced in both directions.
+
+  Bernoulli would make a real difference in a relation where one side is
+  much more connected than the other (one-to-many or many-to-one). In that
+  case $\text{tph} \gg \text{hpt}$ and Bernoulli would push most corruptions
+  towards the tail, generating harder and more informative negatives.
+
+  In our case, since \textit{cites} is close to symmetric, both strategies
+  behave the same way and Bernoulli gives no real advantage.
+
+% --------------------------------------------------------------------
+\subsection*{A.5 \hspace{0.3em} Disconnected Paper}
+% --------------------------------------------------------------------
+% TODO
+ KGE models learn by minimising a loss computed over training triples.
+  For TransE, the loss for a single triple is:
+  \[
+    \mathcal{L} = |\mathbf{e}_{head} + \mathbf{e}_{rel} - \mathbf{e}_{tail}|
+  \]
+  Only the entity embeddings that appear in a triple contribute to this
+  loss and get updated during training. An isolated paper, one with no
+  outgoing or incoming citations, never appears as head or tail in any
+  triple. As a result, its loss is never computed, no gradient is ever
+  produced for it, and its 128-dimensional embedding vector stays exactly
+  at its random initialisation throughout the entire training process.
+
+  While all other papers are gradually moved to meaningful positions in
+  the embedding space (papers with similar citation patterns end up close
+  to each other), the isolated paper remains at a random point with no
+  structural information encoded in it.
+
+  When PCA is applied to project all embeddings to 2D, the principal
+  components capture the directions of maximum variance in the trained
+  embeddings. Since the isolated paper's embedding is random and has no
+  alignment with these structured directions, it projects near the origin
+  of the PCA plot,appearing as a lone point close to the centre, far
+  from any cluster, with no meaningful neighbours.
+% ====================================================================
+\section*{B \hspace{0.5em} Exploiting the Global Graph Structure}
+% ====================================================================
+
+\subsection*{B.1 \hspace{0.3em} Let's Forget About the Graph}
+% TODO
+
+\subsection*{B.2 \hspace{0.3em} Exploiting the Graph Structure}
+% TODO
+
+\subsection*{B.3 \hspace{0.3em} Tricking the GNN}
+% TODO
+
+\subsection*{B.4 \hspace{0.3em} The More the Merrier?}
+% TODO
+
+\subsection*{B.5 \hspace{0.3em} What if We Do Not Have Initial Information?}
+% TODO
+
+\subsection*{B.6 \hspace{0.3em} Link Prediction with GNNs}
+% TODO
+
+\subsection*{B.7 \hspace{0.3em} Where Are the Embeddings?}
+% TODO
+
+\subsection*{B.8 \hspace{0.3em} Embedding Spaces}
+% TODO
+
+\subsection*{B.9 \hspace{0.3em} Generating Embeddings for New Papers}
+% TODO
+
+\end{document}
+
+    
+
+\end{document}
